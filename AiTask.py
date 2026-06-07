@@ -11,7 +11,6 @@ import os
 # ==============================================================================
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=GEMINI_API_KEY) 
-# ==============================================================================
 
 # ==============================================================================
 # 💾 데이터 영구 저장 및 불러오기 설정
@@ -19,19 +18,15 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 DATA_FILE = "assignments_data.json"
 
 def load_data():
-    """파일에서 데이터를 불러오는 함수"""
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # JSON에는 날짜가 '문자열'로 저장되므로, 다시 파이썬 '날짜' 객체로 변환해 줍니다.
             for assign in data:
                 assign['deadline'] = datetime.datetime.strptime(assign['deadline'], "%Y-%m-%d").date()
             return data
     return []
 
 def save_data(data):
-    """데이터를 파일에 저장하는 함수"""
-    # 날짜 객체를 텍스트로 변환하기 위한 헬퍼 함수
     def date_converter(obj):
         if isinstance(obj, datetime.date):
             return obj.strftime("%Y-%m-%d")
@@ -42,16 +37,25 @@ def save_data(data):
 
 # --- 세션 상태 초기화 ---
 if 'assignments' not in st.session_state:
-    st.session_state.assignments = load_data() # 빈 리스트 대신 파일에서 읽어옵니다.
+    st.session_state.assignments = load_data() 
 if 'user_history_multiplier' not in st.session_state:
     st.session_state.user_history_multiplier = 1.0
+
+# 👇 요구사항 3: 체크박스를 즉각적으로 반응하게 만드는 콜백(Callback) 함수
+def sync_task(assign_id, task_idx, key_name):
+    """체크박스가 클릭되는 즉시 세션 상태를 저장 파일과 동기화합니다."""
+    new_val = st.session_state[key_name]
+    for a in st.session_state.assignments:
+        if a['id'] == assign_id:
+            a['tasks'][task_idx]['completed'] = new_val
+            break
+    save_data(st.session_state.assignments)
 
 
 # ==============================================================================
 # 🤖 AI 과제 분석 호출 함수
 # ==============================================================================
 def analyze_assignment_with_ai(title, subject, desc, file_text=""):
-    """과제 정보를 Gemini API로 보내 JSON 형태로 분석 결과를 받아오는 함수"""
     prompt = f"""
     당신은 대학생의 과제를 분석해주는 AI 플래너입니다. 아래 과제 정보를 분석하여 반드시 JSON 형식으로만 답변하세요.
     
@@ -63,14 +67,13 @@ def analyze_assignment_with_ai(title, subject, desc, file_text=""):
     
     [JSON 출력 형식]
     {{
-        "task_type": "과제 유형 (예: 프로그래밍/CS, 회계/수리, 어학/에세이 중 택 1)",
+        "task_type": "과제 유형",
         "tasks": [
-            {{"name": "세부 태스크명", "estimated_hours": 예상 소요시간(실수형, 예: 1.5)}}
+            {{"name": "세부 태스크명", "estimated_hours": 1.5}}
         ],
-        "total_estimated_hours": 총 예상 소요시간(실수형),
+        "total_estimated_hours": 5.0,
         "checklist": [
-            "제출 전 체크해야 할 양식 및 조건 1",
-            "제출 전 체크해야 할 양식 및 조건 2"
+            "제출 전 체크해야 할 양식 및 조건 1"
         ]
     }}
     JSON 외의 다른 설명은 절대 추가하지 마세요.
@@ -103,14 +106,14 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("과제 파일 업로드 (선택)", type=['pdf', 'docx', 'txt', 'hwp', 'png', 'jpg'])
     
-    if st.button("🚀 AI 분석 및 플랜 생성"):
+    # 👇 요구사항 1: 눈에 띄는 ➕ 버튼으로 수정 (type="primary" 적용)
+    if st.button("➕ 새 과제 분석 및 등록", type="primary", use_container_width=True):
         if new_title and new_subject:
             with st.spinner('AI가 과제를 분석하고 세부 계획을 세우는 중입니다...'):
                 file_text = "업로드된 파일 텍스트" if uploaded_file else ""
                 
                 ai_result = analyze_assignment_with_ai(new_title, new_subject, new_desc, file_text)
                 
-                # 💡 엉뚱한 곳에 있던 코드가 사이드바 안쪽 이 자리로 들어와야 합니다!
                 if ai_result:
                     new_assignment = {
                         "id": len(st.session_state.assignments) + 1,
@@ -123,9 +126,10 @@ with st.sidebar:
                         "checklist": ai_result.get("checklist", [])
                     }
                     st.session_state.assignments.append(new_assignment)
-                    
-                    # 과제가 추가될 때마다 즉시 저장!
                     save_data(st.session_state.assignments) 
+                    
+                    # 👇 요구사항 2: 새 과제가 등록되면 '제출 전 점검' 선택 칸을 방금 만든 과제로 강제 이동시킵니다.
+                    st.session_state.assign_selector = new_title
                     
                     st.success("과제가 성공적으로 분석되어 추가되었습니다!")
         else:
@@ -134,14 +138,13 @@ with st.sidebar:
 
 # --- 메인 대시보드 ---
 if not st.session_state.assignments:
-    st.info("👈 왼쪽 사이드바에서 새로운 과제를 등록해주세요.")
+    st.info("👈 왼쪽 사이드바에서 ➕ 버튼을 눌러 새로운 과제를 등록해주세요.")
 else:
     # --- 데이터 사전 처리 ---
     today = datetime.date.today()
     for assign in st.session_state.assignments:
         days_left = (assign['deadline'] - today).days
         assign['days_left'] = days_left if days_left >= 0 else 0
-        
         assign['adjusted_total_hours'] = assign['base_total_hours'] * st.session_state.user_history_multiplier
         
         available_hours = assign['days_left'] * 4 
@@ -177,14 +180,17 @@ else:
                 
                 st.write("**세부 태스크 진행**")
                 for i, task in enumerate(assign['tasks']):
-                    # 체크박스 클릭 시 즉시 데이터 반영 및 파일 저장
-                    new_val = st.checkbox(task['name'], value=task['completed'], key=f"task_{assign['id']}_{i}")
-                    if new_val != task['completed']:
-                        task['completed'] = new_val
-                        save_data(st.session_state.assignments)
+                    # 👇 요구사항 3: on_change 속성으로 콜백 함수 연결 (반응 속도 개선)
+                    key_name = f"task_{assign['id']}_{i}"
+                    st.checkbox(
+                        task['name'], 
+                        value=task['completed'], 
+                        key=key_name, 
+                        on_change=sync_task, 
+                        args=(assign['id'], i, key_name)
+                    )
 
     with col2:
-        # 오늘 해야 할 일 추천
         st.subheader("💡 오늘 해야 할 일")
         today_tasks_shown = False
         for assign in sorted_assignments:
@@ -196,10 +202,15 @@ else:
         if not today_tasks_shown:
             st.success("오늘 급하게 처리할 태스크가 없습니다! 🎉")
 
-        # 제출물 최종 점검
         st.subheader("📋 제출 전 최종 점검")
-        target_assign_id = st.selectbox("과제 선택", [a['title'] for a in st.session_state.assignments])
-        selected_assign = next((a for a in st.session_state.assignments if a['title'] == target_assign_id), None)
+        
+        # 👇 요구사항 2: key="assign_selector"를 부여하여 새 과제 등록 시 자동으로 화면이 전환되도록 설정
+        target_assign_title = st.selectbox(
+            "과제 선택", 
+            [a['title'] for a in st.session_state.assignments],
+            key="assign_selector" 
+        )
+        selected_assign = next((a for a in st.session_state.assignments if a['title'] == target_assign_title), None)
         
         if selected_assign and selected_assign['checklist']:
             st.write("교수님 공지 및 양식 기반 자동 생성 체크리스트")
