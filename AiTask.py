@@ -1,25 +1,55 @@
 import streamlit as st
-from google import genai  # 👈 최신 라이브러리로 임포트
+from google import genai 
 import datetime 
 import pandas as pd
 import json
 import math
+import os
+
 # ==============================================================================
-# 🔴 [API 연동 지점] 여기에 "새로 발급받은" Gemini API 키를 입력하세요. 🔴
+# 🔴 [API 연동 지점] 
 # ==============================================================================
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-
-client = genai.Client(api_key=GEMINI_API_KEY) # 👈 새로운 클라이언트 초기화 방식
-# ==============================================================================
+client = genai.Client(api_key=GEMINI_API_KEY) 
 # ==============================================================================
 
-# --- 세션 상태 초기화 (데이터 저장용) ---
+# ==============================================================================
+# 💾 데이터 영구 저장 및 불러오기 설정
+# ==============================================================================
+DATA_FILE = "assignments_data.json"
+
+def load_data():
+    """파일에서 데이터를 불러오는 함수"""
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # JSON에는 날짜가 '문자열'로 저장되므로, 다시 파이썬 '날짜' 객체로 변환해 줍니다.
+            for assign in data:
+                assign['deadline'] = datetime.datetime.strptime(assign['deadline'], "%Y-%m-%d").date()
+            return data
+    return []
+
+def save_data(data):
+    """데이터를 파일에 저장하는 함수"""
+    # 날짜 객체를 텍스트로 변환하기 위한 헬퍼 함수
+    def date_converter(obj):
+        if isinstance(obj, datetime.date):
+            return obj.strftime("%Y-%m-%d")
+        raise TypeError("Type not serializable")
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4, default=date_converter)
+
+# --- 세션 상태 초기화 ---
 if 'assignments' not in st.session_state:
-    st.session_state.assignments = []
+    st.session_state.assignments = load_data() # 빈 리스트 대신 파일에서 읽어옵니다.
 if 'user_history_multiplier' not in st.session_state:
-    st.session_state.user_history_multiplier = 1.0 # 기본 1.0배 (기능 6: 사용자 맞춤 학습)
+    st.session_state.user_history_multiplier = 1.0
 
-# --- 기능 3, 4, 5, 12, 13: Gemini AI 과제 분석 호출 함수 ---
+
+# ==============================================================================
+# 🤖 AI 과제 분석 호출 함수
+# ==============================================================================
 def analyze_assignment_with_ai(title, subject, desc, file_text=""):
     """과제 정보를 Gemini API로 보내 JSON 형태로 분석 결과를 받아오는 함수"""
     prompt = f"""
@@ -46,26 +76,26 @@ def analyze_assignment_with_ai(title, subject, desc, file_text=""):
     JSON 외의 다른 설명은 절대 추가하지 마세요.
     """
     try:
-        # 👈 새로운 API 호출 방식과 gemini-1.5-flash 모델 적용
         response = client.models.generate_content(
             model='gemini-3.5-flash',
             contents=prompt,
         )
-        # Markdown JSON 블록 제거 후 파싱
         cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(cleaned_text)
     except Exception as e:
         st.error(f"AI 분석 중 오류가 발생했습니다: {e}")
         return None
 
-# --- UI 레이아웃 시작 ---
+
+# ==============================================================================
+# 🎨 UI 레이아웃 시작
+# ==============================================================================
 st.set_page_config(page_title="AI 과제 플래너", layout="wide")
 st.title("📚 AI 과제 플래너")
 
 # 사이드바: 1. 과제 정보 입력 & 2. 파일 업로드
 with st.sidebar:
     st.header("📝 새 과제 등록")
-    # 예시로 전산회계나 자바 프로그래밍 과제 등을 입력해 볼 수 있습니다.
     new_title = st.text_input("과제명", placeholder="예: 챕터 1~3 분개 및 재무제표 작성")
     new_subject = st.text_input("과목명", placeholder="예: 전산회계")
     new_deadline = st.date_input("마감일", min_value=datetime.date.today())
@@ -76,11 +106,11 @@ with st.sidebar:
     if st.button("🚀 AI 분석 및 플랜 생성"):
         if new_title and new_subject:
             with st.spinner('AI가 과제를 분석하고 세부 계획을 세우는 중입니다...'):
-                # (실제 구현 시 여기에 파일 텍스트 추출 로직 추가)
                 file_text = "업로드된 파일 텍스트" if uploaded_file else ""
                 
                 ai_result = analyze_assignment_with_ai(new_title, new_subject, new_desc, file_text)
                 
+                # 💡 엉뚱한 곳에 있던 코드가 사이드바 안쪽 이 자리로 들어와야 합니다!
                 if ai_result:
                     new_assignment = {
                         "id": len(st.session_state.assignments) + 1,
@@ -93,9 +123,14 @@ with st.sidebar:
                         "checklist": ai_result.get("checklist", [])
                     }
                     st.session_state.assignments.append(new_assignment)
+                    
+                    # 과제가 추가될 때마다 즉시 저장!
+                    save_data(st.session_state.assignments) 
+                    
                     st.success("과제가 성공적으로 분석되어 추가되었습니다!")
         else:
             st.warning("과제명과 과목명을 입력해주세요.")
+
 
 # --- 메인 대시보드 ---
 if not st.session_state.assignments:
@@ -107,11 +142,8 @@ else:
         days_left = (assign['deadline'] - today).days
         assign['days_left'] = days_left if days_left >= 0 else 0
         
-        # 기능 6: 사용자 맞춤 시간 예측 적용 (기본 소요시간 * 내 작업 속도 배수)
         assign['adjusted_total_hours'] = assign['base_total_hours'] * st.session_state.user_history_multiplier
         
-        # 기능 11: 마감 위험도 예측
-        # 하루 가용 시간을 4시간으로 가정했을 때의 위험도 계산
         available_hours = assign['days_left'] * 4 
         if available_hours >= assign['adjusted_total_hours'] * 1.5:
             assign['risk'] = "🟢 안전"
@@ -120,7 +152,6 @@ else:
         else:
             assign['risk'] = "🔴 위험"
 
-    # 기능 10: 과제 우선순위 자동 정렬 (마감일 오름차순, 소요시간 내림차순)
     sorted_assignments = sorted(st.session_state.assignments, key=lambda x: (x['days_left'], -x['adjusted_total_hours']))
 
     col1, col2 = st.columns([2, 1])
@@ -131,42 +162,41 @@ else:
             with st.expander(f"[{assign['risk']}] {assign['title']} - {assign['subject']} (마감 D-{assign['days_left']})", expanded=True):
                 st.caption(f"과제 유형: {assign['type']} | AI 예상 시간: {assign['base_total_hours']}h | 🕒 나의 예상 소요 시간(보정됨): {assign['adjusted_total_hours']:.1f}h")
                 
-                # 기능 8: 진행률 자동 계산
                 completed_tasks = sum(1 for t in assign['tasks'] if t['completed'])
                 total_tasks = len(assign['tasks'])
                 progress_pct = int((completed_tasks / total_tasks) * 100) if total_tasks > 0 else 0
                 st.progress(progress_pct, text=f"진행률: {progress_pct}% ({completed_tasks}/{total_tasks})")
                 
-                # 기능 7: 작업량 시각화 (블록)
                 st.write("**작업량 시각화 (1블록 = 30분):**")
                 for task in assign['tasks']:
-                    # 사용자 맞춤 보정시간을 태스크에도 적용
                     adj_task_time = task['estimated_hours'] * st.session_state.user_history_multiplier
                     blocks = "■" * max(1, math.ceil(adj_task_time * 2))
                     st.markdown(f"**{task['name']}** ({adj_task_time:.1f}h)<br><span style='color:#4CAF50;'>{blocks}</span>", unsafe_allow_html=True)
                 
                 st.divider()
                 
-                # 체크박스로 태스크 진행 상황 업데이트
                 st.write("**세부 태스크 진행**")
                 for i, task in enumerate(assign['tasks']):
-                    task['completed'] = st.checkbox(task['name'], value=task['completed'], key=f"task_{assign['id']}_{i}")
+                    # 체크박스 클릭 시 즉시 데이터 반영 및 파일 저장
+                    new_val = st.checkbox(task['name'], value=task['completed'], key=f"task_{assign['id']}_{i}")
+                    if new_val != task['completed']:
+                        task['completed'] = new_val
+                        save_data(st.session_state.assignments)
 
     with col2:
-        # 기능 9: 오늘 해야 할 일 추천
+        # 오늘 해야 할 일 추천
         st.subheader("💡 오늘 해야 할 일")
         today_tasks_shown = False
         for assign in sorted_assignments:
-            if assign['days_left'] <= 3 and progress_pct < 100: # 마감일 3일 이내 과제 우선
-                incomplete_tasks = [t['name'] for t in assign['tasks'] if not t['completed']]
-                if incomplete_tasks:
-                    st.info(f"**{assign['title']}**\n\n👉 {incomplete_tasks[0]}")
-                    today_tasks_shown = True
-                    break # 가장 급한 과제의 첫 번째 태스크만 추천
+            incomplete_tasks = [t['name'] for t in assign['tasks'] if not t['completed']]
+            if assign['days_left'] <= 3 and incomplete_tasks: 
+                st.info(f"**{assign['title']}**\n\n👉 {incomplete_tasks[0]}")
+                today_tasks_shown = True
+                break
         if not today_tasks_shown:
             st.success("오늘 급하게 처리할 태스크가 없습니다! 🎉")
 
-       # 기능 14: 제출물 최종 점검 (기능 12, 13 AI 생성 체크리스트)
+        # 제출물 최종 점검
         st.subheader("📋 제출 전 최종 점검")
         target_assign_id = st.selectbox("과제 선택", [a['title'] for a in st.session_state.assignments])
         selected_assign = next((a for a in st.session_state.assignments if a['title'] == target_assign_id), None)
@@ -174,18 +204,13 @@ else:
         if selected_assign and selected_assign['checklist']:
             st.write("교수님 공지 및 양식 기반 자동 생성 체크리스트")
             
-            # 👇 변경된 부분 1: 모든 항목이 체크되었는지 추적하는 변수 추가
             all_checked = True 
             
             for i, item in enumerate(selected_assign['checklist']):
-                # 사용자가 체크박스를 눌렀는지(True/False) 값을 받아옵니다.
                 is_checked = st.checkbox(item, key=f"check_{selected_assign['id']}_{i}")
-                
-                # 하나라도 체크가 안 되어 있다면 상태를 False로 바꿉니다.
                 if not is_checked:
                     all_checked = False
             
-            # 👇 변경된 부분 2: 버튼 클릭 시 조건문(if-else) 추가
             if st.button("최종 제출 확인", type="primary", use_container_width=True):
                 if all_checked:
                     st.balloons()
