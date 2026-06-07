@@ -166,16 +166,29 @@ else:
         if not today_tasks_shown:
             st.success("오늘 급하게 처리할 태스크가 없습니다! 🎉")
 
-        # 기능 14: 제출물 최종 점검 (기능 12, 13 AI 생성 체크리스트)
+       # 기능 14: 제출물 최종 점검 (기능 12, 13 AI 생성 체크리스트)
         st.subheader("📋 제출 전 최종 점검")
         target_assign_id = st.selectbox("과제 선택", [a['title'] for a in st.session_state.assignments])
         selected_assign = next((a for a in st.session_state.assignments if a['title'] == target_assign_id), None)
         
         if selected_assign and selected_assign['checklist']:
             st.write("교수님 공지 및 양식 기반 자동 생성 체크리스트")
-            for i, item in enumerate(selected_assign['checklist']):
-                st.checkbox(item, key=f"check_{selected_assign['id']}_{i}")
             
+            # 👇 변경된 부분 1: 모든 항목이 체크되었는지 추적하는 변수 추가
+            all_checked = True 
+            
+            for i, item in enumerate(selected_assign['checklist']):
+                # 사용자가 체크박스를 눌렀는지(True/False) 값을 받아옵니다.
+                is_checked = st.checkbox(item, key=f"check_{selected_assign['id']}_{i}")
+                
+                # 하나라도 체크가 안 되어 있다면 상태를 False로 바꿉니다.
+                if not is_checked:
+                    all_checked = False
+            
+            # 👇 변경된 부분 2: 버튼 클릭 시 조건문(if-else) 추가
             if st.button("최종 제출 확인", type="primary", use_container_width=True):
-                st.balloons()
-                st.success("모든 조건이 충족되었습니다. 제출을 진행하세요!")
+                if all_checked:
+                    st.balloons()
+                    st.success("모든 조건이 충족되었습니다. 제출을 진행하세요!")
+                else:
+                    st.warning("⚠️ 앗! 아직 체크하지 않은 항목이 있습니다. 감점될 수 있으니 제출 전 다시 한 번 생각해 보세요!")
